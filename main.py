@@ -119,7 +119,6 @@ threading.Thread(target=ai_auto_pilot, daemon=True).start()
 
 # ==================== 4. 启动服务 ====================
 if __name__ == '__main__':
-    # 获取 Railway 分配的端口
     port = int(os.environ.get("PORT", 8080))
-    # 以 SSE 模式启动 MCP 服务
+    # 关键：使用 sse 模式，并绑定正确的端口
     mcp.run(transport="sse", host="0.0.0.0", port=port)
