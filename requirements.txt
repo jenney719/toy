@@ -1,4 +1,4 @@
 flask
-websocket-client
-requests
-mcp
+    websocket-client
+    requests
+    mcp==1.9.0
