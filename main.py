@@ -120,5 +120,13 @@ threading.Thread(target=ai_auto_pilot, daemon=True).start()
 # ==================== 4. 启动服务 ====================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
-    # 关键：使用 sse 模式，并绑定正确的端口
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    print(f">>> 准备启动 MCP 服务，端口: {port}")
+    
+    # 尝试多种启动方式，自动适配不同的 mcp 版本
+    try:
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
+    except TypeError:
+        try:
+            mcp.run(transport="sse")
+        except TypeError:
+            mcp.run()
