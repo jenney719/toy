@@ -2,6 +2,10 @@ import os
 import threading, time, websocket, requests, json
 from mcp.server.fastmcp import FastMCP
 
+# 让 FastMCP 从环境变量里读端口和地址
+os.environ.setdefault("FASTMCP_PORT", os.environ.get("PORT", "8000"))
+os.environ.setdefault("FASTMCP_HOST", "0.0.0.0")
+
 # ==================== 1. 全局配置 ====================
 AUTO_MODE = False
 DEVICE_ID = os.getenv("DEVICE_ID", "13")
@@ -142,7 +146,6 @@ threading.Thread(target=ai_auto_pilot, daemon=True).start()
 
 # ==================== 4. 启动服务（关键改动） ====================
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8000))
-    print(f">>> 启动 MCP 服务 (streamable-http 模式)，端口: {port}")
-    # 关键：transport 换成 streamable-http，彻底根治首次断连
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+    print(">>> 启动 MCP 服务 (streamable-http 模式)")
+    # 只传 transport，端口交给环境变量 FASTMCP_PORT 控制
+    mcp.run(transport="streamable-http")
