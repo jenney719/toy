@@ -1,14 +1,12 @@
 import os
-from flask import Flask, request
 import threading, time, websocket, requests, json
-
-app = Flask(__name__)
+from mcp.server.fastmcp import FastMCP
 
 # ==================== 1. 全局配置 ====================
 AUTO_MODE = False
 DEVICE_ID = os.getenv("DEVICE_ID", "13")
 GROUP = os.getenv("GROUP", "6f4f01112918afe457d9d9e9c1c7a331")
-SHARE_ID = os.getenv("SHARE_ID", "834697")  # 初始 ID，之后可用 /update_id 热更新
+SHARE_ID = os.getenv("SHARE_ID", "834697")
 
 class KisstoyRemote:
     def __init__(self, device_id, group, share_id):
@@ -37,7 +35,6 @@ class KisstoyRemote:
                     on_open=lambda ws: (print("!!! WS 连通成功，设备已就绪 !!!"), setattr(self, 'is_connected', True)),
                     on_error=lambda ws, e: print(f"!!! WS 错误: {e} !!!"),
                     on_close=lambda ws, *args: (print("!!! WS 断开，5秒后重连 !!!"), setattr(self, 'is_connected', False)))
-                # 心跳保活，防止被云端踢掉
                 self.ws.run_forever(ping_interval=10, ping_timeout=5)
                 time.sleep(5)
         threading.Thread(target=run, daemon=True).start()
@@ -58,58 +55,60 @@ class KisstoyRemote:
 
 remote = KisstoyRemote(DEVICE_ID, GROUP, SHARE_ID)
 
-# ==================== 2. HTTP 控制接口 ====================
-@app.route('/cmd')
-def cmd():
-    """手动控制接口： /cmd?m=通道&v=强度 """
-    global AUTO_MODE
-    motor = request.args.get('m', '1')
-    val = request.args.get('v', '0')
+# ==================== 2. MCP 服务端 ====================
+mcp = FastMCP("Kisstoy-Controller")
 
-    # 急停逻辑：任何 v=0 都视为紧急停止
-    if int(val) == 0:
+@mcp.tool()
+def control_device(motor: int, intensity: int) -> str:
+    """
+    控制物理设备。motor=1 代表振动，motor=3 代表吮吸。
+    intensity 范围为 0-100。传 0 表示紧急停止并关闭所有通道。
+    """
+    global AUTO_MODE
+    if intensity == 0:
         AUTO_MODE = False
         remote.control("1", 0)
         remote.control("3", 0)
-        return "ALL STOPPED (EMERGENCY)"
-
-    AUTO_MODE = False  # 手动操作时打断自动模式
-    remote.control(motor, val)
-    return f"OK: {motor} -> {val}"
-
-@app.route('/auto_on')
-def auto_on():
-    """开启自动挂机"""
-    global AUTO_MODE
-    AUTO_MODE = True
-    return "Auto-pilot ON"
-
-@app.route('/auto_off')
-def auto_off():
-    """关闭自动挂机并关机"""
-    global AUTO_MODE
+        return "已触发急停，全部通道已关闭。"
     AUTO_MODE = False
-    remote.control("1", 0)
-    remote.control("3", 0)
-    return "Auto-pilot OFF"
+    remote.control(str(motor), intensity)
+    return f"通道 {motor} 已调整为 {intensity}% 强度。"
 
-@app.route('/update_id')
-def update_id():
-    """热更新 ID： /update_id?id=新ID数字 """
+@mcp.tool()
+def set_auto_pilot(enable: bool) -> str:
+    """
+    开启或关闭自动挂机模式（交替振动和吮吸）。
+    enable=true 开启，enable=false 彻底关闭并关机。
+    """
+    global AUTO_MODE
+    if enable:
+        AUTO_MODE = True
+        return "自动挂机已开启，正在按节奏运行。"
+    else:
+        AUTO_MODE = False
+        remote.control("1", 0)
+        remote.control("3", 0)
+        return "自动挂机已关闭，设备已停息。"
+
+@mcp.tool()
+def update_share_id(new_id: str) -> str:
+    """
+    当用户的分享链接 ID 发生变化时使用，热更新最新的 SHARE_ID 并立即重新绑定。
+    """
     global SHARE_ID
-    new_id = request.args.get('id')
-    if new_id:
+    try:
         SHARE_ID = str(new_id).strip()
         remote.share_id = SHARE_ID
+        print(f"DEBUG: 正在热更新 SHARE_ID 为新值: {SHARE_ID}")
         remote.bind()
-        return f"SHARE_ID 已热更新为: {SHARE_ID}，并已重新绑定。"
-    return "请提供 ?id=xxx"
+        return f"SHARE_ID 已更新为 {SHARE_ID}，正在用新 ID 重新绑定。"
+    except Exception as e:
+        return f"更新失败: {e}"
 
-# ==================== 3. 自动驾驶线程（0.1 秒级急停响应） ====================
+# ==================== 3. 自动驾驶线程 ====================
 def ai_auto_pilot():
     while True:
         if AUTO_MODE:
-            # 节奏段1：振动舒缓
             remote.control("1", 40)
             remote.control("3", 0)
             for _ in range(30):
@@ -117,7 +116,6 @@ def ai_auto_pilot():
                 time.sleep(0.1)
             if not AUTO_MODE: continue
 
-            # 节奏段2：吮吸增强
             remote.control("1", 0)
             remote.control("3", 60)
             for _ in range(20):
@@ -125,7 +123,6 @@ def ai_auto_pilot():
                 time.sleep(0.1)
             if not AUTO_MODE: continue
 
-            # 节奏段3：双通道齐开
             remote.control("1", 50)
             remote.control("3", 50)
             for _ in range(10):
@@ -133,7 +130,6 @@ def ai_auto_pilot():
                 time.sleep(0.1)
             if not AUTO_MODE: continue
 
-            # 节奏段4：间歇停顿
             remote.control("1", 0)
             remote.control("3", 0)
             for _ in range(10):
@@ -144,8 +140,9 @@ def ai_auto_pilot():
 
 threading.Thread(target=ai_auto_pilot, daemon=True).start()
 
-# ==================== 4. 启动服务 ====================
+# ==================== 4. 启动服务（关键改动） ====================
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8080))
-    print(f">>> 启动纯 HTTP 服务，端口: {port}")
-    app.run(host='0.0.0.0', port=port)
+    port = int(os.environ.get("PORT", 8000))
+    print(f">>> 启动 MCP 服务 (streamable-http 模式)，端口: {port}")
+    # 关键：transport 换成 streamable-http，彻底根治首次断连
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
