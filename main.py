@@ -1,14 +1,14 @@
 import os
+from flask import Flask, request
 import threading, time, websocket, requests, json
 
-# 针对 mcp 1.9.0 的新版导入方式
-from mcp.server.mcpserver import MCPServer
+app = Flask(__name__)
 
 # ==================== 1. 全局配置 ====================
 AUTO_MODE = False
 DEVICE_ID = os.getenv("DEVICE_ID", "13")
 GROUP = os.getenv("GROUP", "6f4f01112918afe457d9d9e9c1c7a331")
-SHARE_ID = os.getenv("SHARE_ID", "834697")
+SHARE_ID = os.getenv("SHARE_ID", "834697") # 初始ID，之后通过接口热更新
 
 class KisstoyRemote:
     def __init__(self, device_id, group, share_id):
@@ -37,6 +37,7 @@ class KisstoyRemote:
                     on_open=lambda ws: (print("!!! WS 连通成功，设备已就绪 !!!"), setattr(self, 'is_connected', True)),
                     on_error=lambda ws, e: print(f"!!! WS 错误: {e} !!!"),
                     on_close=lambda ws, *args: (print("!!! WS 断开，5秒后重连 !!!"), setattr(self, 'is_connected', False)))
+                # 心跳保活，防止被踢
                 self.ws.run_forever(ping_interval=10, ping_timeout=5)
                 time.sleep(5)
         threading.Thread(target=run, daemon=True).start()
@@ -57,57 +58,52 @@ class KisstoyRemote:
 
 remote = KisstoyRemote(DEVICE_ID, GROUP, SHARE_ID)
 
-# ==================== 2. 新版 MCP 服务 ====================
-# 旧版叫 FastMCP，新版重命名为 MCPServer
-mcp = MCPServer("Kisstoy-Controller")
-
-@mcp.tool()
-def control_device(motor: int, intensity: int) -> str:
-    """
-    控制物理设备。motor=1 代表 zhendong，motor=3 代表 shunxi。
-    intensity 范围为 0-100。传 0 表示紧急停止并关闭所有通道。
-    """
+# ==================== 2. HTTP 控制接口 ====================
+@app.route('/cmd')
+def cmd():
+    """手动控制接口：?m=通道&v=强度"""
     global AUTO_MODE
-    if intensity == 0:
+    motor = request.args.get('m', '1') 
+    val = request.args.get('v', '0')
+    
+    # 急停逻辑
+    if int(val) == 0:
         AUTO_MODE = False
         remote.control("1", 0)
         remote.control("3", 0)
-        return "已触发急停，全部通道已关闭。"
+        return "ALL STOPPED (EMERGENCY)"
+        
     AUTO_MODE = False
-    remote.control(str(motor), intensity)
-    return f"通道 {motor} 已调整为 {intensity}% 强度。"
+    remote.control(motor, val)
+    return f"OK: {motor} -> {val}"
 
-@mcp.tool()
-def set_auto_pilot(enable: bool) -> str:
-    """
-    开启或关闭自动挂机模式（交替 zhendong 和 shunxi）。
-    enable=true 开启，enable=false 彻底关闭并关机。
-    """
+@app.route('/auto_on')
+def auto_on():
+    """开启自动驾驶"""
     global AUTO_MODE
-    if enable:
-        AUTO_MODE = True
-        return "自动挂机已开启，正在按节奏运行。"
-    else:
-        AUTO_MODE = False
-        remote.control("1", 0)
-        remote.control("3", 0)
-        return "自动挂机已关闭，设备已停息。"
+    AUTO_MODE = True
+    return "Auto-pilot ON"
 
-@mcp.tool()
-def update_share_id(new_id: str) -> str:
-    """
-    当用户的分享链接 ID 发生变化时使用，热更新最新的 SHARE_ID 并立即重新绑定。
-    参数 new_id: 从手机分享链接里拿到的最新 id 数字字符串。
-    """
+@app.route('/auto_off')
+def auto_off():
+    """关闭自动驾驶"""
+    global AUTO_MODE
+    AUTO_MODE = False
+    remote.control("1", 0)
+    remote.control("3", 0)
+    return "Auto-pilot OFF"
+
+@app.route('/update_id')
+def update_id():
+    """热更新ID接口：?id=新ID"""
     global SHARE_ID
-    try:
+    new_id = request.args.get('id')
+    if new_id:
         SHARE_ID = str(new_id).strip()
         remote.share_id = SHARE_ID
-        print(f"DEBUG: 正在热更新 SHARE_ID 为新值: {SHARE_ID}")
         remote.bind()
-        return f"SHARE_ID 已更新为 {SHARE_ID}，正在用新 ID 重新绑定通道。"
-    except Exception as e:
-        return f"更新失败: {e}"
+        return f"SHARE_ID 已热更新为: {SHARE_ID}，并已重新绑定。"
+    return "请提供 ?id=xxx"
 
 # ==================== 3. 自动驾驶线程 ====================
 def ai_auto_pilot():
@@ -144,10 +140,8 @@ def ai_auto_pilot():
 
 threading.Thread(target=ai_auto_pilot, daemon=True).start()
 
-# ==================== 4. 启动 ====================
+# ==================== 4. 启动服务 ====================
 if __name__ == '__main__':
-    # 获取 Railway 分配的端口，如果获取不到默认用 8000
-    port = int(os.environ.get("PORT", 8000))
-    print(f">>> 准备启动 MCP 服务，端口: {port}")
-    # 启用 SSE 模式
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8080))
+    print(f">>> 启动纯 HTTP 服务，端口: {port}")
+    app.run(host='0.0.0.0', port=port)
