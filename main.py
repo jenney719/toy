@@ -8,7 +8,7 @@ app = Flask(__name__)
 AUTO_MODE = False
 DEVICE_ID = os.getenv("DEVICE_ID", "13")
 GROUP = os.getenv("GROUP", "6f4f01112918afe457d9d9e9c1c7a331")
-SHARE_ID = os.getenv("SHARE_ID", "834697") # 初始ID，之后通过接口热更新
+SHARE_ID = os.getenv("SHARE_ID", "834697")  # 初始 ID，之后可用 /update_id 热更新
 
 class KisstoyRemote:
     def __init__(self, device_id, group, share_id):
@@ -37,7 +37,7 @@ class KisstoyRemote:
                     on_open=lambda ws: (print("!!! WS 连通成功，设备已就绪 !!!"), setattr(self, 'is_connected', True)),
                     on_error=lambda ws, e: print(f"!!! WS 错误: {e} !!!"),
                     on_close=lambda ws, *args: (print("!!! WS 断开，5秒后重连 !!!"), setattr(self, 'is_connected', False)))
-                # 心跳保活，防止被踢
+                # 心跳保活，防止被云端踢掉
                 self.ws.run_forever(ping_interval=10, ping_timeout=5)
                 time.sleep(5)
         threading.Thread(target=run, daemon=True).start()
@@ -61,32 +61,32 @@ remote = KisstoyRemote(DEVICE_ID, GROUP, SHARE_ID)
 # ==================== 2. HTTP 控制接口 ====================
 @app.route('/cmd')
 def cmd():
-    """手动控制接口：?m=通道&v=强度"""
+    """手动控制接口： /cmd?m=通道&v=强度 """
     global AUTO_MODE
-    motor = request.args.get('m', '1') 
+    motor = request.args.get('m', '1')
     val = request.args.get('v', '0')
-    
-    # 急停逻辑
+
+    # 急停逻辑：任何 v=0 都视为紧急停止
     if int(val) == 0:
         AUTO_MODE = False
         remote.control("1", 0)
         remote.control("3", 0)
         return "ALL STOPPED (EMERGENCY)"
-        
-    AUTO_MODE = False
+
+    AUTO_MODE = False  # 手动操作时打断自动模式
     remote.control(motor, val)
     return f"OK: {motor} -> {val}"
 
 @app.route('/auto_on')
 def auto_on():
-    """开启自动驾驶"""
+    """开启自动挂机"""
     global AUTO_MODE
     AUTO_MODE = True
     return "Auto-pilot ON"
 
 @app.route('/auto_off')
 def auto_off():
-    """关闭自动驾驶"""
+    """关闭自动挂机并关机"""
     global AUTO_MODE
     AUTO_MODE = False
     remote.control("1", 0)
@@ -95,7 +95,7 @@ def auto_off():
 
 @app.route('/update_id')
 def update_id():
-    """热更新ID接口：?id=新ID"""
+    """热更新 ID： /update_id?id=新ID数字 """
     global SHARE_ID
     new_id = request.args.get('id')
     if new_id:
@@ -105,10 +105,11 @@ def update_id():
         return f"SHARE_ID 已热更新为: {SHARE_ID}，并已重新绑定。"
     return "请提供 ?id=xxx"
 
-# ==================== 3. 自动驾驶线程 ====================
+# ==================== 3. 自动驾驶线程（0.1 秒级急停响应） ====================
 def ai_auto_pilot():
     while True:
         if AUTO_MODE:
+            # 节奏段1：振动舒缓
             remote.control("1", 40)
             remote.control("3", 0)
             for _ in range(30):
@@ -116,6 +117,7 @@ def ai_auto_pilot():
                 time.sleep(0.1)
             if not AUTO_MODE: continue
 
+            # 节奏段2：吮吸增强
             remote.control("1", 0)
             remote.control("3", 60)
             for _ in range(20):
@@ -123,6 +125,7 @@ def ai_auto_pilot():
                 time.sleep(0.1)
             if not AUTO_MODE: continue
 
+            # 节奏段3：双通道齐开
             remote.control("1", 50)
             remote.control("3", 50)
             for _ in range(10):
@@ -130,6 +133,7 @@ def ai_auto_pilot():
                 time.sleep(0.1)
             if not AUTO_MODE: continue
 
+            # 节奏段4：间歇停顿
             remote.control("1", 0)
             remote.control("3", 0)
             for _ in range(10):
