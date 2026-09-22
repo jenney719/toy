@@ -2,7 +2,8 @@ import os
 import threading, time, websocket, requests, json
 from mcp.server.fastmcp import FastMCP
 
-# 让 FastMCP 从环境变量里读端口和地址
+# ==================== 0. 让 FastMCP 从环境变量读取监听地址和端口 ====================
+# Railway 会自动注入 PORT 环境变量，这里兜底为 8000
 os.environ.setdefault("FASTMCP_PORT", os.environ.get("PORT", "8000"))
 os.environ.setdefault("FASTMCP_HOST", "0.0.0.0")
 
@@ -10,7 +11,7 @@ os.environ.setdefault("FASTMCP_HOST", "0.0.0.0")
 AUTO_MODE = False
 DEVICE_ID = os.getenv("DEVICE_ID", "13")
 GROUP = os.getenv("GROUP", "6f4f01112918afe457d9d9e9c1c7a331")
-SHARE_ID = os.getenv("SHARE_ID", "834697")
+SHARE_ID = os.getenv("SHARE_ID", "834697")  # 初始 ID，之后可用 update_share_id 热更新
 
 class KisstoyRemote:
     def __init__(self, device_id, group, share_id):
@@ -39,6 +40,7 @@ class KisstoyRemote:
                     on_open=lambda ws: (print("!!! WS 连通成功，设备已就绪 !!!"), setattr(self, 'is_connected', True)),
                     on_error=lambda ws, e: print(f"!!! WS 错误: {e} !!!"),
                     on_close=lambda ws, *args: (print("!!! WS 断开，5秒后重连 !!!"), setattr(self, 'is_connected', False)))
+                # 心跳保活，防止被云端踢掉
                 self.ws.run_forever(ping_interval=10, ping_timeout=5)
                 time.sleep(5)
         threading.Thread(target=run, daemon=True).start()
@@ -98,6 +100,7 @@ def set_auto_pilot(enable: bool) -> str:
 def update_share_id(new_id: str) -> str:
     """
     当用户的分享链接 ID 发生变化时使用，热更新最新的 SHARE_ID 并立即重新绑定。
+    参数 new_id: 从手机分享链接里拿到的最新 id 数字字符串。
     """
     global SHARE_ID
     try:
@@ -144,8 +147,9 @@ def ai_auto_pilot():
 
 threading.Thread(target=ai_auto_pilot, daemon=True).start()
 
-# ==================== 4. 启动服务（关键改动） ====================
+# ==================== 4. 启动服务（关键修正） ====================
 if __name__ == '__main__':
     print(">>> 启动 MCP 服务 (streamable-http 模式)")
-    # 只传 transport，端口交给环境变量 FASTMCP_PORT 控制
+    print(f">>> 监听端口由环境变量 FASTMCP_PORT 决定: {os.environ.get('FASTMCP_PORT')}")
+    # 只传 transport，绝不再传 host/port，避免 TypeError
     mcp.run(transport="streamable-http")
